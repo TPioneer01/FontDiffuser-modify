@@ -23,13 +23,35 @@ def get_parser():
                         help="The channels of the UNet.")
     parser.add_argument("--style_image_size", type=int, default=96, help="The size of style images.")
     parser.add_argument("--content_image_size", type=int, default=96, help="The size of content images.")
-    parser.add_argument("--content_encoder_downsample_size", type=int, default=3, 
+    parser.add_argument("--content_encoder_downsample_size", type=int, default=3,
                         help="The downsample size of the content encoder.")
     parser.add_argument("--channel_attn", type=bool, default=True, help="Whether to use the se attention.",)
-    parser.add_argument("--content_start_channel", type=int, default=64, 
+    parser.add_argument("--content_start_channel", type=int, default=64,
                         help="The channels of the fisrt layer output of content encoder.",)
-    parser.add_argument("--style_start_channel", type=int, default=64, 
+    parser.add_argument("--style_start_channel", type=int, default=64,
                         help="The channels of the fisrt layer output of content encoder.",)
+    parser.add_argument("--enable_structure_guidance", action="store_true",
+                        help="Enable loading and using structure priors such as stroke maps during training and inference.")
+    parser.add_argument("--structure_cache_root", type=str, default=None,
+                        help="Optional directory that stores per-sample .npz files with pre-computed structure cues.")
+    parser.add_argument("--structure_feature_keys", type=str, default="stroke_map,skeleton_map,radical_map",
+                        help="Comma separated feature names expected inside every structure cache npz file.")
+    parser.add_argument("--structure_token_dim", type=int, default=128,
+                        help="Embedding dimension of the lightweight structure adapter that produces cross-attention tokens.")
+    parser.add_argument("--structure_guidance_start", type=float, default=1.5,
+                        help="Structure head weight when the diffusion step is close to the starting timestep (high noise).")
+    parser.add_argument("--structure_guidance_end", type=float, default=0.5,
+                        help="Structure head weight when the diffusion step approaches the final timestep (low noise).")
+    parser.add_argument("--style_guidance_start", type=float, default=0.5,
+                        help="Style head weight near the starting timestep.")
+    parser.add_argument("--style_guidance_end", type=float, default=1.2,
+                        help="Style head weight near the final timestep.")
+    parser.add_argument("--structure_feedback_interval", type=int, default=5,
+                        help="Interval (in model calls) to trigger the lightweight CPS-style feedback during sampling.")
+    parser.add_argument("--structure_feedback_eta", type=float, default=0.2,
+                        help="Step size for the CPS-style feedback that nudges the latent towards the provided structure map.")
+    parser.add_argument("--structure_loss_weight", type=float, default=0.1,
+                        help="Coefficient for the structure reconstruction loss that supervises the auxiliary head during training.")
     
     # Training
     parser.add_argument("--phase_2", action="store_true", help="Training in phase 2 using SCR module.")

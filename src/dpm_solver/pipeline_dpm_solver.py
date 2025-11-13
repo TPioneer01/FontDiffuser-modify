@@ -10,13 +10,14 @@ class FontDiffuserDPMPipeline():
     """
     
     def __init__(
-        self, 
-        model, 
+        self,
+        model,
         ddpm_train_scheduler,
         version="V3",
         model_type="noise",
         guidance_type="classifier-free",
-        guidance_scale=7.5
+        guidance_scale=7.5,
+        head_weight_config=None,
     ):
         super().__init__()
         self.model = model
@@ -28,6 +29,7 @@ class FontDiffuserDPMPipeline():
         self.model_type = model_type
         self.guidance_type = guidance_type
         self.guidance_scale = guidance_scale
+        self.head_weight_config = head_weight_config or {}
 
     def numpy_to_pil(self, images):
         """Convert a numpy image or a batch of images to a PIL image.
@@ -55,10 +57,21 @@ class FontDiffuserDPMPipeline():
         method="multistep",
         correcting_x0_fn=None,
         generator=None,
+        structure_features=None,
     ):
         model_kwargs = {}
         model_kwargs["version"] = self.version
         model_kwargs["content_encoder_downsample_size"] = content_encoder_downsample_size
+        if self.head_weight_config:
+            model_kwargs["head_weights"] = self.head_weight_config
+
+        prepared_structure = self._prepare_structure_features(
+            structure_features=structure_features,
+            batch_size=batch_size,
+            device=self.model.device,
+        )
+        if prepared_structure:
+            model_kwargs["structure_features"] = prepared_structure
 
         cond = []
         cond.append(content_images)
@@ -115,3 +128,29 @@ class FontDiffuserDPMPipeline():
         x_images = self.numpy_to_pil(x_sample)
 
         return x_images
+
+    def _prepare_structure_features(self, structure_features, batch_size, device):
+        if not structure_features:
+            return {}
+
+        prepared = {}
+        for key, value in structure_features.items():
+            if isinstance(value, torch.Tensor):
+                tensor = value.to(device)
+            else:
+                tensor = torch.tensor(value, dtype=torch.float32, device=device)
+
+            if tensor.dim() == 3:
+                tensor = tensor.unsqueeze(0)
+            if tensor.dim() != 4:
+                continue
+
+            if tensor.shape[0] != batch_size:
+                if tensor.shape[0] == 1:
+                    tensor = tensor.repeat(batch_size, 1, 1, 1)
+                else:
+                    tensor = tensor[:batch_size]
+
+            prepared[key] = tensor
+
+        return prepared

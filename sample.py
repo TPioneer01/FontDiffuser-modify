@@ -40,11 +40,22 @@ def arg_parse():
                         help="The saving directory.")
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--ttf_path", type=str, default="ttf/KaiXinSongA.ttf")
+    parser.add_argument("--structure_npz_path", type=str, default=None,
+                        help="Optional npz file that stores structure priors for guidance.")
     args = parser.parse_args()
     style_image_size = args.style_image_size
     content_image_size = args.content_image_size
     args.style_image_size = (style_image_size, style_image_size)
     args.content_image_size = (content_image_size, content_image_size)
+    if hasattr(args, "structure_feature_keys"):
+        if isinstance(args.structure_feature_keys, str):
+            args.structure_feature_keys_list = [
+                key.strip() for key in args.structure_feature_keys.split(',') if key.strip()
+            ]
+        else:
+            args.structure_feature_keys_list = [str(key).strip() for key in args.structure_feature_keys if str(key).strip()]
+    else:
+        args.structure_feature_keys_list = []
 
     return args
 
@@ -111,17 +122,48 @@ def load_fontdiffuer_pipeline(args):
     print("Loaded training DDPM scheduler sucessfully!")
 
     # Load the DPM_Solver to generate the sample.
+    head_weight_config = {}
+    if args.enable_structure_guidance:
+        head_weight_config = {
+            "structure": {"start": args.structure_guidance_start, "end": args.structure_guidance_end},
+            "style": {"start": args.style_guidance_start, "end": args.style_guidance_end},
+            "feedback_interval": args.structure_feedback_interval,
+            "feedback_eta": args.structure_feedback_eta,
+        }
+
     pipe = FontDiffuserDPMPipeline(
         model=model,
         ddpm_train_scheduler=train_scheduler,
         model_type=args.model_type,
         guidance_type=args.guidance_type,
         guidance_scale=args.guidance_scale,
+        head_weight_config=head_weight_config,
     )
     print("Loaded dpm_solver pipeline sucessfully!")
 
     return pipe
 
+
+def load_structure_features(args):
+    if not args.enable_structure_guidance or not args.structure_npz_path:
+        return {}
+
+    if not os.path.exists(args.structure_npz_path):
+        print(f"Structure npz path {args.structure_npz_path} not found, skip structure guidance.")
+        return {}
+
+    data = np.load(args.structure_npz_path)
+    features = {}
+    for key in args.structure_feature_keys_list:
+        if key in data:
+            array = data[key]
+            tensor = torch.from_numpy(array).float()
+            if tensor.ndim == 2:
+                tensor = tensor.unsqueeze(0)
+            features[key] = tensor
+    if not features:
+        print("Provided structure npz does not contain expected keys, skip structure guidance.")
+    return features
 
 def sampling(args, pipe, content_image=None, style_image=None):
     if not args.demo:
@@ -143,6 +185,7 @@ def sampling(args, pipe, content_image=None, style_image=None):
     with torch.no_grad():
         content_image = content_image.to(args.device)
         style_image = style_image.to(args.device)
+        structure_features = load_structure_features(args)
         print(f"Sampling by DPM-Solver++ ......")
         start = time.time()
         images = pipe.generate(
@@ -158,7 +201,8 @@ def sampling(args, pipe, content_image=None, style_image=None):
             algorithm_type=args.algorithm_type,
             skip_type=args.skip_type,
             method=args.method,
-            correcting_x0_fn=args.correcting_x0_fn)
+            correcting_x0_fn=args.correcting_x0_fn,
+            structure_features=structure_features)
         end = time.time()
 
         if args.save_image:

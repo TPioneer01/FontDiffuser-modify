@@ -334,8 +334,8 @@ def model_wrapper(
                 x_in = torch.cat([x] * 2)
                 t_in = torch.cat([t_continuous] * 2)
                 c_in = []
-                c_in.append(torch.cat([unconditional_condition[0], condition[0]], dim=0))
-                c_in.append(torch.cat([unconditional_condition[1], condition[1]], dim=0))
+                for idx in range(len(condition)):
+                    c_in.append(torch.cat([unconditional_condition[idx], condition[idx]], dim=0))
                 noise_uncond, noise = noise_pred_fn(x_in, t_in, cond=c_in).chunk(2)
                 return noise_uncond + guidance_scale * (noise - noise_uncond)
             elif model_kwargs["version"] == "FG_Sep":

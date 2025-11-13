@@ -41,6 +41,15 @@ def get_args():
     content_image_size = args.content_image_size
     args.style_image_size = (style_image_size, style_image_size)
     args.content_image_size = (content_image_size, content_image_size)
+    if hasattr(args, "structure_feature_keys"):
+        if isinstance(args.structure_feature_keys, str):
+            args.structure_feature_keys_list = [
+                key.strip() for key in args.structure_feature_keys.split(',') if key.strip()
+            ]
+        else:
+            args.structure_feature_keys_list = [str(key).strip() for key in args.structure_feature_keys if str(key).strip()]
+    else:
+        args.structure_feature_keys_list = []
 
     return args
 
@@ -165,7 +174,13 @@ def main():
             style_images = samples["style_image"]
             target_images = samples["target_image"]
             nonorm_target_images = samples["nonorm_target_image"]
-            
+
+            structure_features = {}
+            if args.enable_structure_guidance:
+                for key in args.structure_feature_keys_list:
+                    if key in samples:
+                        structure_features[key] = samples[key].to(accelerator.device)
+
             with accelerator.accumulate(model):
                 # Sample noise that we'll add to the samples
                 noise = torch.randn_like(target_images)
@@ -186,12 +201,13 @@ def main():
                         style_images[i, :, :, :] = 1
 
                 # Predict the noise residual and compute loss
-                noise_pred, offset_out_sum = model(
-                    x_t=noisy_target_images, 
-                    timesteps=timesteps, 
+                noise_pred, offset_out_sum, aux_outputs = model(
+                    x_t=noisy_target_images,
+                    timesteps=timesteps,
                     style_images=style_images,
                     content_images=content_images,
-                    content_encoder_downsample_size=args.content_encoder_downsample_size)
+                    content_encoder_downsample_size=args.content_encoder_downsample_size,
+                    structure_features=structure_features if structure_features else None)
                 diff_loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
                 offset_loss = offset_out_sum / 2
                 
@@ -212,6 +228,23 @@ def main():
                 loss = diff_loss + \
                         args.perceptual_coefficient * percep_loss + \
                             args.offset_coefficient * offset_loss
+
+                if args.enable_structure_guidance and structure_features and "structure" in aux_outputs:
+                    structure_target = torch.cat(
+                        [structure_features[key] for key in args.structure_feature_keys_list if key in structure_features],
+                        dim=1)
+                    structure_target = F.interpolate(
+                        structure_target,
+                        size=aux_outputs["structure"].shape[-2:],
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                    if structure_target.shape[1] < aux_outputs["structure"].shape[1]:
+                        repeat = aux_outputs["structure"].shape[1] // structure_target.shape[1] + 1
+                        structure_target = structure_target.repeat(1, repeat, 1, 1)
+                    structure_target = structure_target[:, :aux_outputs["structure"].shape[1]]
+                    structure_loss = F.l1_loss(torch.tanh(aux_outputs["structure"]), structure_target)
+                    loss += args.structure_loss_weight * structure_loss
                 
                 if args.phase_2:
                     neg_images = samples["neg_images"]

@@ -6,6 +6,14 @@ from src import (ContentEncoder,
 
 
 def build_unet(args):
+    structure_keys = getattr(args, "structure_feature_keys", [])
+    if isinstance(structure_keys, str):
+        structure_keys = [key.strip() for key in structure_keys.split(',') if key.strip()]
+
+    condition_heads = ()
+    if getattr(args, "enable_structure_guidance", False):
+        condition_heads = ("structure", "style")
+
     unet = UNet(
         sample_size=args.resolution,
         in_channels=3,
@@ -32,7 +40,10 @@ def build_unet(args):
         channel_attn=args.channel_attn,
         content_encoder_downsample_size=args.content_encoder_downsample_size,
         content_start_channel=args.content_start_channel,
-        reduction=32)
+        reduction=32,
+        condition_head_names=condition_heads,
+        structure_feature_keys=tuple(structure_keys),
+        structure_token_dim=getattr(args, "structure_token_dim", 128))
     
     return unet
 
