@@ -52,6 +52,9 @@ class UNet(ModelMixin, ConfigMixin):
         content_encoder_downsample_size: int = 4,
         content_start_channel: int = 16,
         reduction: int = 32,
+        condition_head_names: Tuple[str, ...] = (),
+        structure_feature_keys: Tuple[str, ...] = (),
+        structure_token_dim: int = 128,
     ):
         super().__init__()
 
@@ -59,6 +62,12 @@ class UNet(ModelMixin, ConfigMixin):
 
         self.sample_size = sample_size
         time_embed_dim = block_out_channels[0] * 4
+
+        self.condition_head_names = tuple(condition_head_names)
+        self.structure_feature_keys = tuple(structure_feature_keys)
+        self.structure_token_dim = structure_token_dim
+        self.base_out_channels = out_channels
+        self.total_head_channels = out_channels * (1 + len(self.condition_head_names))
 
         # input
         self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=3, padding=(1, 1))
@@ -165,7 +174,7 @@ class UNet(ModelMixin, ConfigMixin):
         # out
         self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=norm_num_groups, eps=norm_eps)
         self.conv_act = nn.SiLU()
-        self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, 3, padding=1)
+        self.conv_out = nn.Conv2d(block_out_channels[0], self.total_head_channels, 3, padding=1)
 
     def set_attention_slice(self, slice_size):
         if slice_size is not None and self.config.attention_head_dim % slice_size != 0:
@@ -293,7 +302,18 @@ class UNet(ModelMixin, ConfigMixin):
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
 
+        head_outputs = {}
+        total_heads = 1 + len(self.condition_head_names)
+        if total_heads > 1:
+            batch, channels, height, width = sample.shape
+            sample = sample.view(batch, total_heads, self.base_out_channels, height, width)
+            main = sample[:, 0]
+            aux = sample[:, 1:]
+            for idx, name in enumerate(self.condition_head_names):
+                head_outputs[name] = aux[:, idx]
+            sample = main
+
         if not return_dict:
-            return (sample, offset_out_sum)
+            return (sample, offset_out_sum, head_outputs)
 
         return UNetOutput(sample=sample)

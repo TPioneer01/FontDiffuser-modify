@@ -1,8 +1,12 @@
 import os
 import random
+from typing import Dict
+
+import numpy as np
 from PIL import Image
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 
@@ -19,11 +23,21 @@ class FontDataset(Dataset):
     """
     def __init__(self, args, phase, transforms=None, scr=False):
         super().__init__()
+        self.args = args
         self.root = args.data_root
         self.phase = phase
         self.scr = scr
         if self.scr:
             self.num_neg = args.num_neg
+
+        self.enable_structure = getattr(args, "enable_structure_guidance", False)
+        self.structure_cache_root = getattr(args, "structure_cache_root", None)
+        feature_keys = getattr(args, "structure_feature_keys", "") or ""
+        if isinstance(feature_keys, str):
+            self.structure_feature_keys = [key.strip() for key in feature_keys.split(',') if key.strip()]
+        else:
+            self.structure_feature_keys = [str(key).strip() for key in feature_keys if str(key).strip()]
+        self.resolution = args.resolution
         
         # Get Data path
         self.get_path()
@@ -73,6 +87,10 @@ class FontDataset(Dataset):
             "target_image": target_image,
             "target_image_path": target_image_path,
             "nonorm_target_image": nonorm_target_image}
+
+        if self.enable_structure and self.structure_feature_keys:
+            structure_features = self._load_structure_features(style=style, content=content)
+            sample.update(structure_features)
         
         if self.scr:
             # Get neg image from the different style of the same content
@@ -102,3 +120,49 @@ class FontDataset(Dataset):
 
     def __len__(self):
         return len(self.target_images)
+
+    def _load_structure_features(self, style: str, content: str) -> Dict[str, torch.Tensor]:
+        """Load cached structure cues for the given style-content pair.
+
+        Each cached file is expected to be an ``npz`` archive that stores
+        arrays named according to ``self.structure_feature_keys``. When a
+        feature is missing we fall back to a zero tensor so that downstream
+        modules can rely on the key to exist without additional guards.
+        """
+
+        features: Dict[str, torch.Tensor] = {}
+        cache_available = self.structure_cache_root is not None
+        cache_name = f"{style}+{content}.npz"
+        cache_path = None
+        if cache_available:
+            cache_path = os.path.join(self.structure_cache_root, cache_name)
+
+        cache_data = None
+        if cache_available and os.path.exists(cache_path):
+            try:
+                cache_data = np.load(cache_path)
+            except ValueError:
+                cache_data = None
+
+        for key in self.structure_feature_keys:
+            if cache_data is not None and key in cache_data:
+                array = cache_data[key]
+            else:
+                array = np.zeros((self.resolution, self.resolution), dtype=np.float32)
+
+            tensor = torch.from_numpy(array).float()
+            if tensor.ndim == 2:
+                tensor = tensor.unsqueeze(0)
+            elif tensor.ndim > 3:
+                tensor = tensor.reshape(tensor.shape[0], tensor.shape[-2], tensor.shape[-1])
+
+            if tensor.shape[-1] != self.resolution or tensor.shape[-2] != self.resolution:
+                tensor = F.interpolate(
+                    tensor.unsqueeze(0),
+                    size=(self.resolution, self.resolution),
+                    mode="bilinear",
+                    align_corners=False).squeeze(0)
+
+            features[key] = tensor
+
+        return features
